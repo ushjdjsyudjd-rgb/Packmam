@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>پک‌من - نسخه نهایی و چندمرحله‌ای</title>
+    <style>
+        body { background-color: #050505; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; color: white; font-family: Tahoma; overflow: hidden; touch-action: none; }
+        .ui-panel { background: rgba(20, 20, 20, 0.9); padding: 10px 20px; border-radius: 12px; border: 2px solid #333; margin-bottom: 10px; display: flex; gap: 20px; z-index: 10; }
+        .stat-value { font-size: 20px; font-weight: bold; color: yellow; }
+        canvas { border: 4px solid #1919A6; border-radius: 8px; max-width: 95vw; max-height: 70vh; }
+        #status { color: #0f0; }
+        .power-up { color: #ff0 !important; text-shadow: 0 0 10px #ff0; }
+        .instructions { font-size: 12px; color: #888; margin-top: 10px; text-align: center; }
+        .message { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: yellow; font-size: 28px; text-align: center; background: rgba(0,0,0,0.7); padding: 20px; border-radius: 10px; display: none; }
+    </style>
+</head>
+<body>
+
+    <div class="ui-panel">
+        <div>امتیاز: <span id="score" class="stat-value">0</span></div>
+        <div>رکورد: <span id="highScore" class="stat-value">0</span></div>
+        <div>مرحله: <span id="level" class="stat-value">1</span></div>
+        <div id="status">وضعیت: عادی</div>
+    </div>
+
+    <canvas id="gameCanvas" width="400" height="380"></canvas>
+    
+    <div class="instructions">در کامپیوتر: کلیدهای جهت‌نما | در موبایل: کج کردن گوشی</div>
+    <div id="messageDisplay" class="message"></div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('score');
+        const highScoreElement = document.getElementById('highScore');
+        const levelElement = document.getElementById('level');
+        const statusElement = document.getElementById('status');
+        const messageDisplay = document.getElementById('messageDisplay');
+
+        // --- سیستم صوتی دیجیتال ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSound(freq, type, duration, vol=0.1) {
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+                osc.connect(gain); gain.connect(audioCtx.destination);
+                osc.start(); osc.stop(audioCtx.currentTime + duration);
+            } catch(e) {}
+        }
+
+        const tileSize = 20;
+        let score = 0;
+        let highScore = localStorage.getItem('pacmanHighScore') || 0;
+        highScoreElement.innerText = highScore;
+        let currentLevel = 1;
+        levelElement.innerText = currentLevel;
+        let gameOver = false;
+        let powerMode = false;
+        let powerTimer = 0;
+        let gameSpeed = 160; // فریم ریت بازی (کمتر = سریع‌تر)
+
+        // --- نقشه‌های مراحل مختلف ---
+        const levelMaps = [
+            // Level 1 Map (Initial map)
+            [
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                [1,3,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,3,1],
+                [1,0,1,1,0,1,0,1,1,1,1,1,1,0,1,0,1,1,0,1],
+                [2,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,2], // تونل
+                [1,0,1,1,0,1,1,1,0,1,1,0,1,1,1,0,1,1,0,1],
+                [1,0,0,0,0,0,0,0,0,2,2,0,0,0,0,0,0,0,0,1],
+                [1,1,1,1,0,1,0,1,1,2,2,1,1,0,1,0,1,1,1,1],
+                [1,2,2,2,0,1,0,1,2,2,2,2,1,0,1,0,2,2,2,1],
+                [1,1,1,1,0,1,0,1,1,1,1,1,1,0,1,0,1,1,1,1],
+                [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+                [1,3,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1,0,3,1],
+                [1,1,0,1,0,1,0,1,1,1,1,1,1,0,1,0,1,0,1,1],
+                [2,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,2], // تونل
+                [1,0,1,1,1,1,1,1,1,0,0,1,1,1,1,1,1,1,0,1],
+                [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+            ],
+            // Level 2 Map (More walls, different layout)
+            [
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                [1,0,0,1,0,0,0,0,0,1,1,0,0,0,0,0,1,0,0,1],
+                [1,0,1,1,1,1,0,1,0,0,0,0,1,0,1,1,1,1,0,1],
+                [1,0,0,0,0,0,0,1,0,1,1,0,1,0,0,0,0,0,0,1],
+                [1,1,1,0,1,1,0,1,0,1,1,0,1,0,1,1,0,1,1,1],
+                [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2], // تونل
+                [1,1,1,0,1,1,0,1,1,1,1,1,1,0,1,1,0,1,1,1],
+                [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+                [1,0,1,1,1,1,1,1,0,1,1,0,1,1,1,1,1,1,0,1],
+                [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+                [1,1,1,0,1,1,0,1,1,0,0,1,1,0,1,1,0,1,1,1],
+                [1,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0,1],
+                [1,0,1,1,0,1,1,1,1,1,1,1,1,1,1,0,1,1,0,1],
+                [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+            ],
+            // Level 3 Map (Even more complex)
+            [
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                [1,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,1],
+                [1,0,1,0,1,1,1,0,1,0,0,1,0,1,1,1,0,1,0,1],
+                [1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,1],
+                [1,1,1,0,1,0,1,1,1,1,1,1,1,1,0,1,0,1,1,1],
+                [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+                [1,1,1,0,1,0,1,1,1,1,1,1,1,1,0,1,0,1,1,1],
+                [1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,1],
+                [1,0,1,0,1,1,1,0,1,0,0,1,0,1,1,1,0,1,0,1],
+                [1,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,1],
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+            ]
+        ];
+
+        let currentMap; // نقشه فعلی بازی
+        let pacman;
+        let ghosts;
+        let pointsToCollect; // تعداد نقاطی که باید جمع‌آوری شوند
+
+        function initializeGame(level) {
+            currentLevel = level;
+            levelElement.innerText = currentLevel;
+            currentMap = JSON.parse(JSON.stringify(levelMaps[level - 1])); // Deep copy
+            
+            // بازنشانی وضعیت بازی
+            pacman = { x: 1, y: 3, dir: 'right' };
+            ghosts = [
+                { x: 9, y: 7, color: 'red', type: 'chase', respawnX: 9, respawnY: 7 },
+                { x: 10, y: 7, color: 'pink', type: 'predict', respawnX: 10, respawnY: 7 }
+            ];
+
+            // افزایش سختی با هر مرحله
+            for (let i = 0; i < level - 1; i++) {
+                 ghosts.push({ x: 10 + i, y: 7, color: ['cyan', 'orange', 'green'][i % 3], type: 'chase', respawnX: 10 + i, respawnY: 7 });
+            }
+            
+            gameSpeed = 160 - (level * 15); // بازی سریع‌تر می‌شود
+            if (gameSpeed < 50) gameSpeed = 50; // محدودیت سرعت
+
+            powerMode = false;
+            powerTimer = 0;
+            gameOver = false;
+            
+            pointsToCollect = 0;
+            for(let r=0; r<currentMap.length; r++) {
+                for(let c=0; c<currentMap[r].length; c++) {
+                    if(currentMap[r][c] === 0 || currentMap[r][c] === 3) pointsToCollect++;
+                }
+            }
+            messageDisplay.style.display = 'none';
+        }
+
+        // --- کنترل‌های حرکتی (موبایل) ---
+        window.addEventListener('deviceorientation', (event) => {
+            if (gameOver) return;
+            let tiltLR = event.gamma; // چپ/راست
+            let tiltFB = event.beta;  // جلو/عقب
+            const threshold = 12; 
+
+            if (Math.abs(tiltLR) > Math.abs(tiltFB)) {
+                if (tiltLR > threshold) pacman.dir = 'right';
+                else if (tiltLR < -threshold) pacman.dir = 'left';
+            } else {
+                if (tiltFB > threshold + 10) pacman.dir = 'down';
+                else if (tiltFB < threshold - 10) pacman.dir = 'up';
+            }
+        });
+
+        function update() {
+            if (gameOver) return;
+
+            // منطق تلپورت
+            if (pacman.x < 0) pacman.x = currentMap[0].length - 1;
+            if (pacman.x >= currentMap[0].length) pacman.x = 0;
+
+            let nX = pacman.x, nY = pacman.y;
+            if (pacman.dir === 'up') nY--;
+            if (pacman.dir === 'down') nY++;
+            if (pacman.dir === 'left') nX--;
+            if (pacman.dir === 'right') nX++;
+
+            if (currentMap[nY] && currentMap[nY][nX] !== 1) {
+                pacman.x = nX; pacman.y = nY;
+            }
+
+            // خوردن نقاط و صدا
+            if (currentMap[pacman.y][pacman.x] === 0) {
+                currentMap[pacman.y][pacman.x] = 2; score += 10; pointsToCollect--;
+                playSound(440, 'sine', 0.05, 0.03);
+            } else if (currentMap[pacman.y][pacman.x] === 3) {
+                currentMap[pacman.y][pacman.x] = 2; score += 50; pointsToCollect--;
+                powerMode = true; powerTimer = 60;
+                statusElement.innerText = "قدرتمند!";
+                statusElement.className = "power-up";
+                playSound(660, 'triangle', 0.3);
+            }
+
+            if (powerMode) {
+                powerTimer--;
+                if (powerTimer <= 0) {
+                    powerMode = false;
+                    statusElement.innerText = "وضعیت: عادی";
+                    statusElement.className = "";
+                }
+            }
+
+            // هوش مصنوعی روح‌ها
+            ghosts.forEach(g => {
+                let tx = pacman.x, ty = pacman.y;
+                if (powerMode) { tx = (g.x > 10 ? 0 : currentMap[0].length - 1); ty = (g.y > currentMap.length / 2 ? 0 : currentMap.length - 1); }
+
+                if (Math.abs(tx - g.x) > Math.abs(ty - g.y)) g.x += (tx > g.x ? 1 : -1);
+                else g.y += (ty > g.y ? 1 : -1);
+
+                if (pacman.x === g.x && pacman.y === g.y) {
+                    if (powerMode) {
+                        score += 200; g.x = g.respawnX; g.y = g.respawnY;
+                        playSound(880, 'square', 0.2);
+                    } else {
+                        gameOver = true;
+                        playSound(150, 'sawtooth', 0.6);
+                    }
+                }
+            });
+
+            // چک کردن اتمام مرحله
+            if (pointsToCollect === 0) {
+                currentLevel++;
+                if (currentLevel > levelMaps.length) {
+                    // بازی تمام شد - همه مراحل را برنده شدید
+                    messageDisplay.innerText = `تبریک! شما برنده شدید!\nامتیاز نهایی: ${score}`;
+                    messageDisplay.style.display = 'block';
+                    gameOver = true;
+                    // می‌توانید یک صفحه برد نهایی اضافه کنید
+                } else {
+                    messageDisplay.innerText = `مرحله ${currentLevel} شروع شد!`;
+                    messageDisplay.style.display = 'block';
+                    setTimeout(() => {
+                        initializeGame(currentLevel); // شروع مرحله جدید
+                        loop(); // حلقه بازی را از سر بگیر
+                    }, 1500); // 1.5 ثانیه نمایش پیغام
+                    return; // تا وقتی پیغام نمایش داده می‌شود، بازی متوقف شود
+                }
+            }
+
+            if (score > highScore) {
+                highScore = score; localStorage.setItem('pacmanHighScore', score);
+                highScoreElement.innerText = score;
+            }
+            scoreElement.innerText = score;
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // اعمال لرزش صفحه هنگام باخت
+            if (gameOver) {
+                let shakeX = Math.random() * 10 - 5;
+                let shakeY = Math.random() * 10 - 5;
+                ctx.translate(shakeX, shakeY);
+            }
+
+            for (let r = 0; r < currentMap.length; r++) {
+                for (let c = 0; c < currentMap[r].length; c++) {
+                    if (currentMap[r][c] === 1) {
+                        ctx.fillStyle = '#1919A6';
+                        ctx.fillRect(c*tileSize+1, r*tileSize+1, tileSize-2, tileSize-2);
+                    } else if (currentMap[r][c] === 0) {
+                        ctx.fillStyle = '#ffb8ae'; ctx.beginPath();
+                        ctx.arc(c*tileSize+10, r*tileSize+10, 2, 0, 7); ctx.fill();
+                    } else if (currentMap[r][c] === 3) {
+                        ctx.fillStyle = 'white'; ctx.beginPath();
+                        ctx.arc(c*tileSize+10, r*tileSize+10, 6, 0, 7); ctx.fill();
+                    }
+                }
+            }
+            
+            // پک‌من
+            ctx.fillStyle = 'yellow'; ctx.beginPath();
+            let open = (Date.now() % 400 < 200) ? 0.2 : 0.05;
+            ctx.arc(pacman.x*20+10, pacman.y*20+10, 8, open*Math.PI, (2-open)*Math.PI);
+            ctx.lineTo(pacman.x*20+10, pacman.y*20+10); ctx.fill();
+
+            // روح‌ها
+            ghosts.forEach(g => {
+                ctx.fillStyle = powerMode ? '#2121ff' : g.color;
+                ctx.beginPath(); ctx.arc(g.x*20+10, g.y*20+10, 8, Math.PI, 0);
+                ctx.lineTo(g.x*20+18, g.y*20+18); ctx.lineTo(g.x*20+2, g.y*20+18); ctx.fill();
+            });
+
+            if (gameOver) {
+                ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.fillRect(-shakeX, -shakeY, canvas.width, canvas.height); // تنظیم برای لرزش
+                ctx.fillStyle = "white"; ctx.textAlign = "center";
+                ctx.font = "bold 24px Tahoma"; ctx.fillText("بازی تمام شد!", 200 - shakeX, 180 - shakeY);
+                ctx.font = "16px Tahoma"; ctx.fillText("برای شروع دوباره ضربه بزنید", 200 - shakeX, 220 - shakeY);
+            }
+            ctx.setTransform(1, 0, 0, 1, 0, 0); // بازگرداندن صفحه از حالت لرزش
+        }
+
+        // --- کنترل‌های ورودی ---
+        window.addEventListener('keydown', e => {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            if (e.key === 'ArrowUp') pacman.dir = 'up';
+            if (e.key === 'ArrowDown') pacman.dir = 'down';
+            if (e.key === 'ArrowLeft') pacman.dir = 'left';
+            if (e.key === 'ArrowRight') pacman.dir = 'right';
+        });
+
+        canvas.addEventListener('touchstart', () => {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            if (gameOver) location.reload();
+        });
+
+        canvas.onclick = () => {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            if (gameOver) location.reload();
+        };
+
+        function loop() { 
+            if (gameOver && pointsToCollect !== 0) { // اگر باخته ولی مراحل هنوز تمام نشده
+                messageDisplay.innerText = `بازی تمام شد!\nامتیاز شما: ${score}\nبرای شروع دوباره کلیک کنید`;
+                messageDisplay.style.display = 'block';
+                return;
+            }
+            update(); draw(); setTimeout(loop, gameSpeed); 
+        }
+
+        initializeGame(1); // شروع بازی از مرحله ۱
+        loop();
+    </script>
+</body>
+</html>
